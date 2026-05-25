@@ -1,1 +1,1089 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASO Performance Dashboard</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <!-- SheetJS for XLSX parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+    <!-- html2pdf for PDF Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .drag-active { background-color: #eff6ff; border-color: #3b82f6; }
+        .hide { display: none !important; }
+        
+        /* PDF Export specific style to hide elements during capture */
+        .pdf-exporting .no-pdf,
+        .pdf-exporting button[title="Export Chart"],
+        .pdf-exporting button[title="Export Current Table to CSV"] { display: none !important; }
+        .pdf-exporting .data-table-section { display: none !important; }
+        .pdf-exporting { height: auto !important; overflow: visible !important; }
+
+        /* Custom Scrollbar for table */
+        .table-container::-webkit-scrollbar { height: 8px; width: 8px; }
+        .table-container::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .table-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .table-container::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        th.sortable:hover { cursor: pointer; background-color: #e2e8f0; }
+        th.sortable::after { content: '\2195'; margin-left: 5px; opacity: 0.3; }
+        th.asc::after { content: '\2191'; opacity: 1; }
+        th.desc::after { content: '\2193'; opacity: 1; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-slate-200 sticky top-0 z-50">
+        <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16 items-center">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="line-chart" class="text-blue-600 h-6 w-6"></i>
+                    <span class="font-bold text-lg tracking-tight">ASO Performance Dashboard</span>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="downloadTemplate()" class="text-sm font-medium text-slate-600 hover:text-slate-900 px-3 py-2 rounded-md transition-colors flex items-center gap-2">
+                        <i data-lucide="download" class="h-4 w-4"></i> Template
+                    </button>
+                    <button onclick="loadSampleData()" class="text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
+                        <i data-lucide="play" class="h-4 w-4"></i> Load Sample Data
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+        
+        <!-- Upload Section -->
+        <div id="uploadSection" class="max-w-2xl mx-auto mt-10">
+            <div class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-slate-900 mb-2">App Store Performance Analysis</h1>
+                <p class="text-slate-500">Upload your ASO data (CSV or XLSX) to analyze Visits, Installs, and Conversion Rates by Source & Month.</p>
+            </div>
+            
+            <div id="dropZone" class="border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center transition-all bg-white cursor-pointer hover:border-blue-400 hover:bg-blue-50/50">
+                <input type="file" id="fileInput" class="hidden" accept=".csv, .xlsx, .xls">
+                <div class="mx-auto h-16 w-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4">
+                    <i data-lucide="upload-cloud" class="h-8 w-8"></i>
+                </div>
+                <h3 class="text-lg font-semibold text-slate-700 mb-1">Click to upload or drag and drop</h3>
+                <p class="text-sm text-slate-500 mb-4">CSV or XLSX (max. 10MB)</p>
+                <p class="text-xs text-slate-400">Required columns: <span class="font-mono bg-slate-100 px-1 rounded">Visits</span>, <span class="font-mono bg-slate-100 px-1 rounded">Installs</span><br>(Supports Google Play formats like SL_Visitors & SL_Acquisition)<br>Optional: <span class="font-mono text-slate-500">Search term, traffic_source, month, Category</span></p>
+            </div>
+
+            <div id="errorMessage" class="hidden mt-4 p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded-r-md flex items-start gap-3">
+                <i data-lucide="alert-circle" class="h-5 w-5 shrink-0 mt-0.5"></i>
+                <div id="errorText" class="text-sm font-medium">Error message goes here.</div>
+            </div>
+        </div>
+
+        <!-- Dashboard Section -->
+        <div id="dashboardSection" class="hidden space-y-6">
+            
+            <!-- Dashboard Header -->
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-slate-900">Performance Overview</h2>
+                    <p class="text-sm text-slate-500" id="dataInfo">Showing analysis for X records.</p>
+                </div>
+                <div class="flex gap-3 no-pdf flex-wrap">
+                    <button id="pdfExportBtn" onclick="exportToPDF()" class="text-sm font-medium bg-red-50 hover:bg-red-100 text-red-700 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border border-red-200" title="Export entire dashboard to PDF">
+                        <i data-lucide="file-text" class="h-4 w-4"></i> Export PDF
+                    </button>
+                    <button onclick="exportFullReport()" class="text-sm font-medium bg-green-50 hover:bg-green-100 text-green-700 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border border-green-200" title="Export aggregated cards and tables">
+                        <i data-lucide="file-spreadsheet" class="h-4 w-4"></i> Export to Sheets (Excel)
+                    </button>
+                    <button onclick="resetDashboard()" class="text-sm font-medium border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg transition-colors flex items-center gap-2">
+                        <i data-lucide="refresh-cw" class="h-4 w-4"></i> New Analysis
+                    </button>
+                </div>
+            </div>
+
+            <!-- Interactive Filter Bar -->
+            <div id="filterBar" class="hidden p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center gap-3 transition-all">
+                <i data-lucide="filter" class="h-4 w-4 text-blue-600"></i>
+                <span class="text-sm font-medium text-blue-900">Active Filters:</span>
+                <div id="filterPills" class="flex gap-2 flex-wrap">
+                    <!-- Populated via JS -->
+                </div>
+                <button onclick="clearFilters()" class="text-sm font-medium text-blue-700 hover:text-blue-900 underline ml-auto transition-colors">Clear All Filters</button>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <div class="text-sm font-medium text-slate-500 mb-1">Total Visits</div>
+                    <div class="text-2xl font-bold text-slate-900" id="kpiVisits">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <div class="text-sm font-medium text-slate-500 mb-1">Total Installs</div>
+                    <div class="text-2xl font-bold text-slate-900" id="kpiInstalls">0</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <div class="text-sm font-medium text-slate-500 mb-1">Overall Conversion Rate (CR)</div>
+                    <div class="text-2xl font-bold text-green-600" id="kpiCR">0%</div>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <div class="text-sm font-medium text-slate-500 mb-1">Top Traffic Source</div>
+                    <div class="text-2xl font-bold text-blue-600 capitalize" id="kpiTopSource">-</div>
+                </div>
+            </div>
+
+            <!-- Top Charts: Pies & Summaries -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Source Pie -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col group relative">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="text-base font-semibold text-slate-800">Installs by Traffic Source</h3>
+                            <p class="text-xs text-slate-400">Click a slice to filter dashboard</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <select id="sourceFormat" class="text-xs border border-slate-200 rounded-md text-slate-600 bg-slate-50 px-2 py-1 outline-none focus:border-blue-400 no-pdf" onchange="if(charts['sourcePie']) charts['sourcePie'].update()">
+                                <option value="absolute">Numbers</option>
+                                <option value="percent">%</option>
+                            </select>
+                            <button onclick="downloadChartImage('sourcePieChart', 'Installs_By_Source')" class="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Export Chart">
+                                <i data-lucide="download" class="h-4 w-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="relative h-56 w-full flex justify-center mt-auto">
+                        <canvas id="sourcePieChart"></canvas>
+                    </div>
+                </div>
+                <!-- Category Pie -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col group relative">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="text-base font-semibold text-slate-800">Installs by Category</h3>
+                            <p class="text-xs text-slate-400">Click a slice to filter dashboard</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <select id="categoryFormat" class="text-xs border border-slate-200 rounded-md text-slate-600 bg-slate-50 px-2 py-1 outline-none focus:border-blue-400 no-pdf" onchange="if(charts['catPie']) charts['catPie'].update()">
+                                <option value="absolute">Numbers</option>
+                                <option value="percent">%</option>
+                            </select>
+                            <button onclick="downloadChartImage('categoryPieChart', 'Installs_By_Category')" class="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Export Chart">
+                                <i data-lucide="download" class="h-4 w-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="relative h-56 w-full flex justify-center mt-auto">
+                        <canvas id="categoryPieChart"></canvas>
+                    </div>
+                </div>
+                <!-- Actionable Takeaways -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm bg-yellow-50/50">
+                    <h3 class="text-base font-semibold text-slate-800 mb-4 flex items-center gap-2">
+                        <i data-lucide="lightbulb" class="h-5 w-5 text-yellow-600"></i> Dynamic Takeaways
+                    </h3>
+                    <div id="takeawaysContainer" class="space-y-3 text-sm text-slate-700">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Time Series Charts -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6" id="timeSeriesContainer">
+                <!-- Primary Source Over Time -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm group w-full" id="primaryTimeCard">
+                    <div class="flex justify-between items-start mb-4">
+                        <h3 class="text-base font-semibold text-slate-800" id="primaryTimeChartTitle">Primary Source: Visits & CR</h3>
+                        <button onclick="downloadChartImage('primaryTimeChart', 'Primary_Over_Time')" class="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Export Chart">
+                            <i data-lucide="download" class="h-4 w-4"></i>
+                        </button>
+                    </div>
+                    <div class="relative h-64 w-full">
+                        <canvas id="primaryTimeChart"></canvas>
+                    </div>
+                </div>
+                <!-- Secondary Source Over Time -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm group w-full" id="secondaryTimeCard">
+                    <div class="flex justify-between items-start mb-4">
+                        <h3 class="text-base font-semibold text-slate-800" id="secondaryTimeChartTitle">Secondary Source: Visits & CR</h3>
+                        <button onclick="downloadChartImage('secondaryTimeChart', 'Secondary_Over_Time')" class="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Export Chart">
+                            <i data-lucide="download" class="h-4 w-4"></i>
+                        </button>
+                    </div>
+                    <div class="relative h-64 w-full">
+                        <canvas id="secondaryTimeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Horizontal Bar Charts (Category Breakdown) -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Installs by Category -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm group">
+                    <div class="flex justify-between items-start mb-4">
+                        <h3 class="text-base font-semibold text-slate-800">Installs vs Category</h3>
+                        <button onclick="downloadChartImage('installsCategoryChart', 'Installs_vs_Category')" class="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Export Chart">
+                            <i data-lucide="download" class="h-4 w-4"></i>
+                        </button>
+                    </div>
+                    <div class="relative h-64 w-full">
+                        <canvas id="installsCategoryChart"></canvas>
+                    </div>
+                </div>
+                <!-- CR by Category -->
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm group">
+                    <div class="flex justify-between items-start mb-4">
+                        <h3 class="text-base font-semibold text-slate-800">Conversion Rate (CR) vs Category</h3>
+                        <button onclick="downloadChartImage('crCategoryChart', 'CR_vs_Category')" class="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" title="Export Chart">
+                            <i data-lucide="download" class="h-4 w-4"></i>
+                        </button>
+                    </div>
+                    <div class="relative h-64 w-full">
+                        <canvas id="crCategoryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data Table -->
+            <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col data-table-section">
+                <div class="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 flex-wrap gap-4">
+                    <h3 class="text-lg font-semibold text-slate-800">Raw Data Explorer</h3>
+                    <div class="flex items-center gap-3">
+                        <div class="relative">
+                            <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400"></i>
+                            <input type="text" id="searchInput" placeholder="Search terms or categories..." class="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64">
+                        </div>
+                        <button onclick="exportToCSV()" class="text-sm font-medium bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg transition-colors flex items-center gap-2 border border-blue-200" title="Export Current Table to CSV">
+                            <i data-lucide="file-spreadsheet" class="h-4 w-4"></i> Export CSV
+                        </button>
+                    </div>
+                </div>
+                <div class="table-container overflow-x-auto">
+                    <table class="w-full text-left border-collapse min-w-[800px]">
+                        <thead>
+                            <tr class="bg-slate-100 text-slate-600 text-xs uppercase tracking-wider border-b border-slate-200">
+                                <th class="px-6 py-3 font-semibold sortable" data-sort="month">Month</th>
+                                <th class="px-6 py-3 font-semibold sortable" data-sort="trafficSource">Source</th>
+                                <th class="px-6 py-3 font-semibold sortable" data-sort="category">Category</th>
+                                <th class="px-6 py-3 font-semibold sortable" data-sort="searchTerm">Search Term</th>
+                                <th class="px-6 py-3 font-semibold sortable text-right" data-sort="visits">Visits</th>
+                                <th class="px-6 py-3 font-semibold sortable text-right" data-sort="installs">Installs</th>
+                                <th class="px-6 py-3 font-semibold sortable text-right" data-sort="cr">CR %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody" class="text-sm divide-y divide-slate-100 bg-white">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="p-4 border-t border-slate-200 text-xs text-slate-500 bg-slate-50 flex justify-between">
+                    <span id="tableInfo">Showing all records</span>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // Initialize Icons
+        lucide.createIcons();
+
+        // Chart default styling
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.color = '#64748b';
+
+        // Distinct Colors for Categories
+        const CATEGORY_COLORS = ['#3b82f6', '#f97316', '#10b981', '#a855f7', '#ef4444', '#06b6d4', '#eab308', '#ec4899'];
+        
+        // Distinct Colors for Sources
+        const SOURCE_COLORS = { 'search': '#ef4444', 'explore': '#3b82f6', 'default': '#94a3b8' };
+        
+        let categoryColorMap = {};
+
+        // Global State
+        let rawData = [];
+        let filteredData = [];
+        let sortCol = 'installs';
+        let sortAsc = false;
+        
+        // Filter State for Drilldowns
+        let activeFilters = { trafficSource: null, category: null };
+        
+        // Chart Instances
+        let charts = {};
+
+        // Custom Plugin for clean, short radial labels
+        const pieLabelsLinePlugin = {
+            id: 'pieLabelsLine',
+            afterDraw(chart) {
+                const ctx = chart.ctx;
+                const meta = chart.getDatasetMeta(0);
+                if (!meta || !meta.data.length) return;
+
+                const isSource = chart.canvas.id === 'sourcePieChart';
+                const formatEl = document.getElementById(isSource ? 'sourceFormat' : 'categoryFormat');
+                if(!formatEl) return;
+                const format = formatEl.value;
+
+                const dataset = chart.data.datasets[0];
+                const total = dataset.data.reduce((a, b) => a + b, 0);
+
+                meta.data.forEach((element, index) => {
+                    const val = dataset.data[index];
+                    
+                    // Hide labels for very small slices (< 4%) to prevent overlap in crowded areas
+                    if (total === 0 || val / total < 0.04) return; 
+
+                    let labelStr = '';
+                    if (format === 'percent') {
+                        const pct = (val / total) * 100;
+                        labelStr = (pct < 1 ? pct.toFixed(1) : Math.round(pct)) + '%';
+                    } else {
+                        labelStr = val >= 1000 ? (val/1000).toFixed(1) + 'k' : val.toLocaleString();
+                    }
+
+                    const angle = (element.startAngle + element.endAngle) / 2;
+                    const x = element.x;
+                    const y = element.y;
+                    const outerRadius = element.outerRadius;
+
+                    const startX = x + Math.cos(angle) * outerRadius;
+                    const startY = y + Math.sin(angle) * outerRadius;
+
+                    // Short, clean straight line outward
+                    const lineLength = 10; 
+                    const endX = x + Math.cos(angle) * (outerRadius + lineLength);
+                    const endY = y + Math.sin(angle) * (outerRadius + lineLength);
+
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(endX, endY);
+                    ctx.strokeStyle = dataset.backgroundColor[index];
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+
+                    // Draw text
+                    ctx.font = '500 10px Inter, sans-serif';
+                    ctx.fillStyle = '#475569';
+                    ctx.textBaseline = 'middle';
+                    
+                    if (Math.cos(angle) >= 0) {
+                        ctx.textAlign = 'left';
+                        ctx.fillText(labelStr, endX + 4, endY);
+                    } else {
+                        ctx.textAlign = 'right';
+                        ctx.fillText(labelStr, endX - 4, endY);
+                    }
+                    
+                    ctx.restore();
+                });
+            }
+        };
+
+        function normalize(str) { 
+            return str === undefined || str === null ? '' : String(str).toLowerCase().replace(/[^a-z0-9]/g, ''); 
+        }
+
+        // Ordered by strict priority! We want 'category' to be matched before 'kwtype'
+        const ALIASES = {
+            visits: ['visits', 'impressions', 'pageviews', 'productpageviews', 'storelistingvisitors', 'visitors', 'views', 'slvisitors'],
+            installs: ['installs', 'downloads', 'units', 'appunits', 'installers', 'acquisitions', 'firsttimedownloads', 'slacquisition', 'slacquisitions'],
+            trafficSource: ['trafficsource', 'source', 'sourcetype', 'acquisitionchannel'],
+            category: ['category', 'group', 'type', 'kwtype'], 
+            searchTerm: ['searchterm', 'keyword', 'term', 'query'],
+            month: ['month', 'date', 'period', 'day']
+        };
+
+        function findBestColumn(normHeaders, aliasList) {
+            for (const alias of aliasList) {
+                const idx = normHeaders.indexOf(alias);
+                if (idx > -1) return idx;
+            }
+            return -1;
+        }
+
+        // --- DOM Elements ---
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadSection = document.getElementById('uploadSection');
+        const dashboardSection = document.getElementById('dashboardSection');
+        const errorMessage = document.getElementById('errorMessage');
+        const errorText = document.getElementById('errorText');
+        const searchInput = document.getElementById('searchInput');
+        const filterBar = document.getElementById('filterBar');
+        const filterPills = document.getElementById('filterPills');
+
+        // --- Event Listeners for File Upload ---
+        dropZone.addEventListener('click', () => fileInput.click());
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); });
+        });
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.add('drag-active'));
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, () => dropZone.classList.remove('drag-active'));
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', function() {
+            if (this.files.length > 0) handleFile(this.files[0]);
+        });
+
+        // --- File Processing Logic ---
+        function handleFile(file) {
+            hideError();
+            const extension = file.name.split('.').pop().toLowerCase();
+
+            if (extension === 'csv') {
+                Papa.parse(file, {
+                    header: false,
+                    skipEmptyLines: true,
+                    complete: results => processRawRows(results.data),
+                    error: err => showError("Failed to parse CSV: " + err.message)
+                });
+            } else if (extension === 'xlsx' || extension === 'xls') {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    try {
+                        const workbook = XLSX.read(new Uint8Array(e.target.result), {type: 'array'});
+                        const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {header: 1, defval: ""});
+                        processRawRows(json);
+                    } catch (err) {
+                        showError("Failed to read Excel file. Ensure it is a valid format.");
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            } else {
+                showError("Unsupported format. Please upload a .csv or .xlsx file.");
+            }
+        }
+
+        function findHeaderRowIndex(rows) {
+            for (let i = 0; i < Math.min(rows.length, 20); i++) {
+                const row = rows[i];
+                if (!row || !Array.isArray(row)) continue;
+                const normRow = row.map(normalize);
+                if (normRow.some(c => ALIASES.visits.includes(c)) && normRow.some(c => ALIASES.installs.includes(c))) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        function formatCategory(str) {
+            if (str === undefined || str === null) return 'Uncategorized';
+            let trimmed = String(str).trim();
+            if (trimmed === '' || trimmed === '-') return 'Uncategorized';
+            return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+        }
+
+        function formatSource(str) {
+            if (str === undefined || str === null) return 'All Sources';
+            let trimmed = String(str).trim();
+            if (trimmed === '' || trimmed === '-') return 'All Sources';
+            return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+        }
+
+        function processRawRows(rows) {
+            if (!rows || rows.length === 0) return showError("The file appears to be empty.");
+
+            const headerIdx = findHeaderRowIndex(rows);
+            if (headerIdx === -1) {
+                return showError("Could not find 'Visits' (or Views/Impressions) and 'Installs' (or Units/Downloads) columns in the first 20 rows. Please check your file headers.");
+            }
+
+            const normHeaders = rows[headerIdx].map(normalize);
+            
+            // Use strict priority matching to grab the exact columns
+            const colVisits = findBestColumn(normHeaders, ALIASES.visits);
+            const colInstalls = findBestColumn(normHeaders, ALIASES.installs);
+            const colSource = findBestColumn(normHeaders, ALIASES.trafficSource);
+            const colCat = findBestColumn(normHeaders, ALIASES.category);
+            const colTerm = findBestColumn(normHeaders, ALIASES.searchTerm);
+            const colMonth = findBestColumn(normHeaders, ALIASES.month);
+
+            rawData = [];
+            categoryColorMap = {}; // Reset colors
+            activeFilters = { trafficSource: null, category: null }; // Reset filters
+
+            for (let i = headerIdx + 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row || row.length === 0) continue;
+
+                const rawVisits = row[colVisits];
+                const rawInstalls = row[colInstalls];
+                
+                if (rawVisits === undefined && rawInstalls === undefined) continue;
+
+                const visits = parseFloat(String(rawVisits || '0').replace(/,/g, '')) || 0;
+                const installs = parseFloat(String(rawInstalls || '0').replace(/,/g, '')) || 0;
+                
+                if (visits === 0 && installs === 0) continue; 
+
+                const cr = visits > 0 ? (installs / visits) * 100 : 0;
+                
+                const catName = formatCategory(colCat > -1 ? row[colCat] : '');
+                const sourceName = formatSource(colSource > -1 ? row[colSource] : '');
+
+                // Map a distinct color to this category if it doesn't have one
+                if (!categoryColorMap[catName]) {
+                    categoryColorMap[catName] = CATEGORY_COLORS[Object.keys(categoryColorMap).length % CATEGORY_COLORS.length];
+                }
+
+                rawData.push({
+                    visits, installs, cr,
+                    trafficSource: sourceName,
+                    category: catName,
+                    searchTerm: colTerm > -1 && row[colTerm] ? String(row[colTerm]).trim() : '-',
+                    month: colMonth > -1 && row[colMonth] ? String(row[colMonth]).trim() : 'All'
+                });
+            }
+
+            if (rawData.length === 0) return showError("No valid data found below the headers.");
+
+            sortCol = 'installs';
+            sortAsc = false;
+            
+            uploadSection.classList.add('hide');
+            dashboardSection.classList.remove('hidden');
+            
+            updateDashboardState();
+        }
+
+        // --- Core Interactivity Engine ---
+        function updateDashboardState() {
+            let currentData = rawData.filter(r => {
+                if (activeFilters.trafficSource && r.trafficSource !== activeFilters.trafficSource) return false;
+                if (activeFilters.category && r.category !== activeFilters.category) return false;
+                return true;
+            });
+
+            document.getElementById('dataInfo').textContent = `Analyzed ${currentData.length.toLocaleString()} records based on filters.`;
+
+            renderFilterBar();
+            updateKPIs(currentData);
+            renderCharts(currentData);
+            renderTakeaways(currentData);
+            
+            const term = searchInput.value.toLowerCase();
+            filteredData = currentData.filter(r => 
+                r.searchTerm.toLowerCase().includes(term) || 
+                r.category.toLowerCase().includes(term) ||
+                r.trafficSource.toLowerCase().includes(term)
+            );
+            renderTable();
+        }
+
+        function toggleFilter(type, value) {
+            activeFilters[type] = activeFilters[type] === value ? null : value;
+            updateDashboardState();
+        }
+
+        function clearFilters() {
+            activeFilters = { trafficSource: null, category: null };
+            updateDashboardState();
+        }
+
+        function renderFilterBar() {
+            if (!activeFilters.trafficSource && !activeFilters.category) {
+                filterBar.classList.add('hidden');
+                return;
+            }
+            filterBar.classList.remove('hidden');
+            
+            let html = '';
+            if (activeFilters.trafficSource) {
+                html += `<div class="bg-white border border-blue-200 text-blue-800 text-xs font-semibold px-3 py-1 rounded-full flex items-center gap-1 shadow-sm cursor-pointer hover:bg-red-50" onclick="toggleFilter('trafficSource', '${activeFilters.trafficSource}')">Source: ${activeFilters.trafficSource} <i data-lucide="x" class="h-3 w-3"></i></div>`;
+            }
+            if (activeFilters.category) {
+                html += `<div class="bg-white border border-blue-200 text-blue-800 text-xs font-semibold px-3 py-1 rounded-full flex items-center gap-1 shadow-sm cursor-pointer hover:bg-red-50" onclick="toggleFilter('category', '${activeFilters.category}')">Category: ${activeFilters.category} <i data-lucide="x" class="h-3 w-3"></i></div>`;
+            }
+            filterPills.innerHTML = html;
+            lucide.createIcons();
+        }
+
+        // --- Aggregation Helpers ---
+        function aggregateBy(data, field, metric) {
+            const groups = {};
+            data.forEach(r => {
+                const key = r[field];
+                groups[key] = (groups[key] || 0) + r[metric];
+            });
+            return groups;
+        }
+
+        function getMonthlyTimeSeries(data, sourceFilter) {
+            const groups = {};
+            data.forEach(r => {
+                if (sourceFilter && r.trafficSource !== sourceFilter) return;
+                if (!groups[r.month]) groups[r.month] = { visits: 0, installs: 0 };
+                groups[r.month].visits += r.visits;
+                groups[r.month].installs += r.installs;
+            });
+            const months = Object.keys(groups).sort((a,b) => parseInt(a) - parseInt(b));
+            const visits = months.map(m => groups[m].visits);
+            const crs = months.map(m => groups[m].visits > 0 ? (groups[m].installs / groups[m].visits * 100) : 0);
+            return { months, visits, crs };
+        }
+
+        function updateKPIs(data) {
+            const totalVisits = data.reduce((sum, r) => sum + r.visits, 0);
+            const totalInstalls = data.reduce((sum, r) => sum + r.installs, 0);
+            const overallCR = totalVisits > 0 ? (totalInstalls / totalVisits * 100).toFixed(1) : 0;
+            const sourceInstalls = aggregateBy(data, 'trafficSource', 'installs');
+            const topSource = Object.keys(sourceInstalls).sort((a,b) => sourceInstalls[b] - sourceInstalls[a])[0] || '-';
+
+            document.getElementById('kpiVisits').textContent = totalVisits.toLocaleString();
+            document.getElementById('kpiInstalls').textContent = totalInstalls.toLocaleString();
+            document.getElementById('kpiCR').textContent = overallCR + '%';
+            document.getElementById('kpiTopSource').textContent = topSource;
+        }
+
+        // --- Chart Rendering ---
+        function clearChart(id) {
+            if (charts[id]) charts[id].destroy();
+        }
+
+        const pieHoverPointer = (e, elements) => e.native.target.style.cursor = elements[0] ? 'pointer' : 'default';
+
+        function renderCharts(data) {
+            // 1. Source Pie
+            clearChart('sourcePie');
+            const sourceData = aggregateBy(data, 'trafficSource', 'installs');
+            const sourceLabels = Object.keys(sourceData);
+            const sBg = sourceLabels.map(l => SOURCE_COLORS[l.toLowerCase()] || SOURCE_COLORS['default']);
+
+            charts['sourcePie'] = new Chart(document.getElementById('sourcePieChart'), {
+                type: 'doughnut',
+                plugins: [pieLabelsLinePlugin],
+                data: {
+                    labels: sourceLabels,
+                    datasets: [{ data: Object.values(sourceData), backgroundColor: sBg, borderWidth: 2, borderColor: '#fff' }]
+                },
+                options: { 
+                    cutout: '65%', 
+                    layout: { padding: 25 },
+                    plugins: { 
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const value = context.raw;
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const format = document.getElementById('sourceFormat').value;
+                                    if (format === 'percent') {
+                                        return ` ${context.label}: ${total > 0 ? ((value / total) * 100).toFixed(1) : 0}%`;
+                                    }
+                                    return ` ${context.label}: ${value.toLocaleString()}`;
+                                }
+                            }
+                        }
+                    },
+                    onHover: pieHoverPointer,
+                    onClick: (e, elements) => {
+                        if (elements.length > 0) toggleFilter('trafficSource', sourceLabels[elements[0].index]);
+                    }
+                }
+            });
+
+            // 2. Category Pie
+            clearChart('catPie');
+            const catData = aggregateBy(data, 'category', 'installs');
+            const catLabels = Object.keys(catData);
+            const catBg = catLabels.map(l => categoryColorMap[l]); 
+
+            charts['catPie'] = new Chart(document.getElementById('categoryPieChart'), {
+                type: 'doughnut',
+                plugins: [pieLabelsLinePlugin],
+                data: {
+                    labels: catLabels,
+                    datasets: [{ data: Object.values(catData), backgroundColor: catBg, borderWidth: 2, borderColor: '#fff' }]
+                },
+                options: { 
+                    cutout: '65%', 
+                    layout: { padding: 25 },
+                    plugins: { 
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const value = context.raw;
+                                    const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                    const format = document.getElementById('categoryFormat').value;
+                                    if (format === 'percent') {
+                                        return ` ${context.label}: ${total > 0 ? ((value / total) * 100).toFixed(1) : 0}%`;
+                                    }
+                                    return ` ${context.label}: ${value.toLocaleString()}`;
+                                }
+                            }
+                        }
+                    },
+                    onHover: pieHoverPointer,
+                    onClick: (e, elements) => {
+                        if (elements.length > 0) toggleFilter('category', catLabels[elements[0].index]);
+                    }
+                }
+            });
+
+            // 3 & 4. Dynamic Time Series
+            const topSources = Object.keys(sourceData).sort((a,b) => sourceData[b] - sourceData[a]);
+            const primarySource = topSources.length > 0 ? topSources[0] : null;
+            const secondarySource = topSources.length > 1 ? topSources[1] : null;
+
+            const renderTimeChart = (canvasId, chartId, source) => {
+                clearChart(chartId);
+                const tData = getMonthlyTimeSeries(data, source);
+                charts[chartId] = new Chart(document.getElementById(canvasId), {
+                    type: 'bar',
+                    data: {
+                        labels: tData.months,
+                        datasets: [
+                            { type: 'line', label: 'CR %', data: tData.crs, borderColor: '#ef4444', backgroundColor: '#ef4444', yAxisID: 'y1', tension: 0.3, borderWidth: 3, pointRadius: 4 },
+                            { type: 'bar', label: 'Visits', data: tData.visits, backgroundColor: '#3b82f6', yAxisID: 'y', borderRadius: 4 }
+                        ]
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: { type: 'linear', display: true, position: 'left', grid: { color: '#f1f5f9' } },
+                            y1: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, min: 0, ticks: { callback: v => v + '%' } }
+                        }
+                    }
+                });
+            };
+
+            const tsContainer = document.getElementById('timeSeriesContainer');
+            if (primarySource) {
+                document.getElementById('primaryTimeChartTitle').textContent = `${primarySource}: Visits & CR`;
+                renderTimeChart('primaryTimeChart', 'time1', primarySource);
+                document.getElementById('primaryTimeCard').style.display = 'block';
+            } else {
+                document.getElementById('primaryTimeCard').style.display = 'none';
+            }
+
+            if (secondarySource) {
+                document.getElementById('secondaryTimeChartTitle').textContent = `${secondarySource}: Visits & CR`;
+                renderTimeChart('secondaryTimeChart', 'time2', secondarySource);
+                document.getElementById('secondaryTimeCard').style.display = 'block';
+                tsContainer.classList.remove('lg:grid-cols-1');
+                tsContainer.classList.add('lg:grid-cols-2');
+            } else {
+                document.getElementById('secondaryTimeCard').style.display = 'none';
+                tsContainer.classList.remove('lg:grid-cols-2');
+                tsContainer.classList.add('lg:grid-cols-1');
+            }
+
+            // 5 & 6. Category Bar Charts (Installs & CR)
+            const catInstallsData = aggregateBy(data, 'category', 'installs');
+            const catVisitsData = aggregateBy(data, 'category', 'visits');
+            
+            const sortedCats = Object.keys(catInstallsData).sort((a,b) => catInstallsData[b] - catInstallsData[a]);
+            
+            const installsArr = sortedCats.map(c => catInstallsData[c]);
+            const crArr = sortedCats.map(c => catVisitsData[c] > 0 ? (catInstallsData[c] / catVisitsData[c] * 100) : 0);
+            const bgColors = sortedCats.map(c => categoryColorMap[c]);
+
+            clearChart('installCat');
+            charts['installCat'] = new Chart(document.getElementById('installsCategoryChart'), {
+                type: 'bar',
+                data: {
+                    labels: sortedCats,
+                    datasets: [{
+                        label: 'Installs',
+                        data: installsArr,
+                        backgroundColor: bgColors,
+                        borderRadius: 4
+                    }]
+                },
+                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#f1f5f9' } } } }
+            });
+
+            clearChart('crCat');
+            charts['crCat'] = new Chart(document.getElementById('crCategoryChart'), {
+                type: 'bar',
+                data: {
+                    labels: sortedCats,
+                    datasets: [{
+                        label: 'CR %',
+                        data: crArr,
+                        backgroundColor: bgColors,
+                        borderRadius: 4
+                    }]
+                },
+                options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { callback: v => v + '%' }, grid: { color: '#f1f5f9' } } } }
+            });
+        }
+
+        function renderTakeaways(data) {
+            const totalInstalls = data.reduce((sum, r) => sum + r.installs, 0);
+            const sourceInstalls = aggregateBy(data, 'trafficSource', 'installs');
+            const container = document.getElementById('takeawaysContainer');
+            let html = '';
+
+            const sources = Object.keys(sourceInstalls);
+            if (sources.length >= 2) {
+                sources.sort((a,b) => sourceInstalls[b] - sourceInstalls[a]);
+                const top = sources[0];
+                const pct = totalInstalls > 0 ? Math.round((sourceInstalls[top] / totalInstalls) * 100) : 0;
+                html += `<p><strong class="text-slate-900">${top} Dominance:</strong> ${pct}% of installs in this view are driven by "${top}".</p>`;
+            }
+
+            const catInstalls = aggregateBy(data, 'category', 'installs');
+            const catVisits = aggregateBy(data, 'category', 'visits');
+            
+            // Look for generic/brand variations
+            const brandInstalls = catInstalls['Brand'] || 0;
+            const genericInstalls = catInstalls['Generic'] || 0;
+            const brandVisits = catVisits['Brand'] || 0;
+            const genericVisits = catVisits['Generic'] || 0;
+            
+            const brandCR = brandVisits ? ((brandInstalls/brandVisits)*100).toFixed(1) : 0;
+            const genCR = genericVisits ? ((genericInstalls/genericVisits)*100).toFixed(1) : 0;
+
+            if (brandInstalls > 0) html += `<p><strong class="text-slate-900">Brand Efficiency:</strong> Users searching for your brand have a strong ${brandCR}% Conversion Rate.</p>`;
+            if (genericVisits > brandVisits && genCR < brandCR) html += `<p><strong class="text-slate-900">Generic Opportunity:</strong> Generic terms drive volume but convert lower (${genCR}%). Consider A/B testing store listings.</p>`;
+
+            if(html === '') html = '<p>Analyze specific source and category splits to uncover deeper insights.</p>';
+            container.innerHTML = html;
+        }
+
+        // --- Table Logic ---
+        searchInput.addEventListener('input', () => updateDashboardState()); 
+
+        document.querySelectorAll('th.sortable').forEach(th => {
+            th.addEventListener('click', () => {
+                const col = th.dataset.sort;
+                sortAsc = sortCol === col ? !sortAsc : false;
+                sortCol = col;
+                
+                document.querySelectorAll('th.sortable').forEach(el => el.classList.remove('asc', 'desc'));
+                th.classList.add(sortAsc ? 'asc' : 'desc');
+                renderTable();
+            });
+        });
+
+        function renderTable() {
+            const tbody = document.getElementById('tableBody');
+            
+            filteredData.sort((a, b) => {
+                let valA = a[sortCol], valB = b[sortCol];
+                if (typeof valA === 'string') return sortAsc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                return sortAsc ? valA - valB : valB - valA;
+            });
+
+            tbody.innerHTML = '';
+            
+            if(filteredData.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center py-8 text-slate-500">No records found matching filters.</td></tr>`;
+                document.getElementById('tableInfo').textContent = `Showing 0 records`;
+                return;
+            }
+
+            filteredData.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition-colors";
+                
+                let catBadgeStyle = `background-color: ${categoryColorMap[row.category]}15; color: ${categoryColorMap[row.category]}; border-color: ${categoryColorMap[row.category]}30;`;
+
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-slate-600">${row.month}</td>
+                    <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs border border-slate-200 shadow-sm">${row.trafficSource}</span></td>
+                    <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 py-1 rounded text-xs border shadow-sm font-medium" style="${catBadgeStyle}">${row.category}</span></td>
+                    <td class="px-6 py-4 font-medium text-slate-800">${row.searchTerm}</td>
+                    <td class="px-6 py-4 text-right">${row.visits.toLocaleString()}</td>
+                    <td class="px-6 py-4 text-right font-semibold">${row.installs.toLocaleString()}</td>
+                    <td class="px-6 py-4 text-right ${row.cr > 30 ? 'text-green-600 font-medium' : 'text-slate-600'}">${row.cr.toFixed(1)}%</td>
+                `;
+                tbody.appendChild(tr);
+            });
+            document.getElementById('tableInfo').textContent = `Showing ${filteredData.length} filtered records`;
+        }
+
+        // --- Utils & Exports ---
+        function showError(msg) { errorText.textContent = msg; errorMessage.classList.remove('hidden'); }
+        function hideError() { errorMessage.classList.add('hidden'); }
+        function resetDashboard() { dashboardSection.classList.add('hidden'); uploadSection.classList.remove('hide'); fileInput.value = ''; searchInput.value = ''; clearFilters(); }
+
+        function downloadChartImage(canvasId, fileName) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const ctx = tempCanvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+            ctx.drawImage(canvas, 0, 0);
+            
+            const link = document.createElement('a');
+            link.download = `ASO_${fileName}_${new Date().toISOString().split('T')[0]}.png`;
+            link.href = tempCanvas.toDataURL('image/png');
+            link.click();
+        }
+
+        function downloadTemplate() {
+            const csv = "data:text/csv;charset=utf-8,month,traffic_source,category,search term,visits,installs\n7,Search,Brand,mybrand app,2775,601\n7,Explore,Generic,-,2205,870\n8,Search,Competitor,otherapp,4741,1186\n8,Explore,Generic,-,3991,2141";
+            const link = document.createElement("a");
+            link.setAttribute("href", encodeURI(csv));
+            link.setAttribute("download", "aso_performance_template.csv");
+            document.body.appendChild(link);
+            link.click(); document.body.removeChild(link);
+        }
+
+        function exportToCSV() {
+            if (filteredData.length === 0) return;
+
+            const exportData = filteredData.map(row => ({
+                'Month': row.month,
+                'Traffic Source': row.trafficSource,
+                'Category': row.category,
+                'Search Term': row.searchTerm,
+                'Visits': row.visits,
+                'Installs': row.installs,
+                'Conversion Rate (%)': row.cr.toFixed(2)
+            }));
+
+            const csv = Papa.unparse(exportData);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `ASO_Analysis_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function exportFullReport() {
+            let currentData = rawData.filter(r => {
+                if (activeFilters.trafficSource && r.trafficSource !== activeFilters.trafficSource) return false;
+                if (activeFilters.category && r.category !== activeFilters.category) return false;
+                return true;
+            });
+
+            if (currentData.length === 0) return;
+
+            const wb = XLSX.utils.book_new();
+
+            const totalVisits = currentData.reduce((sum, r) => sum + r.visits, 0);
+            const totalInstalls = currentData.reduce((sum, r) => sum + r.installs, 0);
+            const overallCR = totalVisits > 0 ? (totalInstalls / totalVisits * 100).toFixed(1) : 0;
+            const sourceInstalls = aggregateBy(currentData, 'trafficSource', 'installs');
+            const topSource = Object.keys(sourceInstalls).sort((a,b) => sourceInstalls[b] - sourceInstalls[a])[0] || '-';
+
+            const kpiData = [
+                ["Metric", "Value"],
+                ["Total Visits", totalVisits],
+                ["Total Installs", totalInstalls],
+                ["Overall Conversion Rate (%)", overallCR],
+                ["Top Traffic Source", topSource]
+            ];
+            const wsKPI = XLSX.utils.aoa_to_sheet(kpiData);
+            XLSX.utils.book_append_sheet(wb, wsKPI, "KPI Overview");
+
+            const sourceVisits = aggregateBy(currentData, 'trafficSource', 'visits');
+            const sourceArr = Object.keys(sourceInstalls).map(s => ({
+                'Traffic Source': s,
+                'Visits': sourceVisits[s] || 0,
+                'Installs': sourceInstalls[s] || 0,
+                'Conversion Rate (%)': sourceVisits[s] > 0 ? ((sourceInstalls[s] / sourceVisits[s]) * 100).toFixed(2) : 0
+            }));
+            const wsSource = XLSX.utils.json_to_sheet(sourceArr);
+            XLSX.utils.book_append_sheet(wb, wsSource, "Traffic Sources");
+
+            const catInstalls = aggregateBy(currentData, 'category', 'installs');
+            const catVisits = aggregateBy(currentData, 'category', 'visits');
+            const catArr = Object.keys(catInstalls).map(c => ({
+                'Category': c,
+                'Visits': catVisits[c] || 0,
+                'Installs': catInstalls[c] || 0,
+                'Conversion Rate (%)': catVisits[c] > 0 ? ((catInstalls[c] / catVisits[c]) * 100).toFixed(2) : 0
+            }));
+            const wsCat = XLSX.utils.json_to_sheet(catArr);
+            XLSX.utils.book_append_sheet(wb, wsCat, "Categories");
+
+            const monthVisits = aggregateBy(currentData, 'month', 'visits');
+            const monthInstalls = aggregateBy(currentData, 'month', 'installs');
+            const months = Object.keys(monthVisits).sort((a,b) => parseInt(a) - parseInt(b));
+            const monthArr = months.map(m => ({
+                'Month': m,
+                'Visits': monthVisits[m],
+                'Installs': monthInstalls[m],
+                'Conversion Rate (%)': monthVisits[m] > 0 ? ((monthInstalls[m] / monthVisits[m]) * 100).toFixed(2) : 0
+            }));
+            const wsTime = XLSX.utils.json_to_sheet(monthArr);
+            XLSX.utils.book_append_sheet(wb, wsTime, "Time Series");
+
+            XLSX.writeFile(wb, `ASO_Full_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+        }
+
+        function exportToPDF() {
+            const btn = document.getElementById('pdfExportBtn');
+            const originalText = btn.innerHTML;
+            
+            btn.innerHTML = `<i data-lucide="loader" class="h-4 w-4 animate-spin"></i> Generating...`;
+            lucide.createIcons();
+            
+            document.body.classList.add('pdf-exporting');
+            window.scrollTo(0, 0);
+
+            const element = document.getElementById('dashboardSection');
+
+            const opt = {
+                margin:       0.3,
+                filename:     `ASO_Dashboard_${new Date().toISOString().split('T')[0]}.pdf`,
+                image:        { type: 'jpeg', quality: 1 },
+                html2canvas:  { 
+                    scale: 2, 
+                    useCORS: true,
+                    scrollY: 0,
+                    windowWidth: document.documentElement.offsetWidth || 1400 
+                },
+                jsPDF:        { unit: 'in', format: 'a3', orientation: 'landscape' }
+            };
+
+            html2pdf().set(opt).from(element).save().then(() => {
+                document.body.classList.remove('pdf-exporting');
+                btn.innerHTML = originalText;
+                lucide.createIcons();
+            });
+        }
+
+        function loadSampleData() {
+            const sampleRows = [
+                ['month', 'traffic_source', 'category', 'search_term', 'visits', 'installs']
+            ];
+            const months = ['7','8','9','10','11','12'];
+            months.forEach(m => {
+                sampleRows.push([m, 'Search', 'Brand', 'onefootball', 3000 + Math.random()*1500, 1400 + Math.random()*500]);
+                sampleRows.push([m, 'Search', 'Competitor', 'fotmob', 800 + Math.random()*300, 100 + Math.random()*50]);
+                sampleRows.push([m, 'Search', 'Generic', 'football scores', 400 + Math.random()*200, 50 + Math.random()*30]);
+                sampleRows.push([m, 'Explore', 'Generic', '-', 2500 + Math.random()*1000, 600 + Math.random()*200]);
+                sampleRows.push([m, 'Explore', 'Brand', '-', 500 + Math.random()*200, 200 + Math.random()*50]);
+            });
+            processRawRows(sampleRows);
+        }
+    </script>
+</body>
+</html>
